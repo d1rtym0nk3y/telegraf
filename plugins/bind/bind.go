@@ -10,9 +10,11 @@ import (
 	"sync"
 	"net/http"
 	"net/url"
+	"strconv"
 	"time"
 	"github.com/influxdb/telegraf/plugins"
-	"launchpad.net/xmlpath"
+	"gopkg.in/xmlpath.v1"
+	"strings"
 )
 
 
@@ -58,10 +60,20 @@ var tr = &http.Transport {
 	ResponseHeaderTimeout: time.Duration(3 * time.Second),
 }
 var client = &http.Client{Transport: tr}
-var xp_req = xmlpath.MustCompile("/isc/bind/statistics/server/requests/opcode")
-var xp_qry = xmlpath.MustCompile("/isc/bind/statistics/server/queries-in/rdtype")
+var xpRequest = xmlpath.MustCompile("/isc/bind/statistics/server/requests/opcode")
+var xpQueryDetail = xmlpath.MustCompile("/isc/bind/statistics/server/queries-in/rdtype")
+
+var xpName = xmlpath.MustCompile("./name/text()")
+var xpCounter =  xmlpath.MustCompile("./counter/text()")
+
 
 func (n *Bind) gatherUrl(addr *url.URL, acc plugins.Accumulator) error {
+	ts := time.Now()
+
+	tags := map[string]string {
+		"server": strings.Split(addr.Host, ":")[0],
+	}
+
 	resp, err := client.Get(addr.String())
 	if err != nil {
 		return fmt.Errorf("error making HTTP request to %s: %s", addr.String(), err)
@@ -76,20 +88,25 @@ func (n *Bind) gatherUrl(addr *url.URL, acc plugins.Accumulator) error {
 		return fmt.Errorf("error parsing response as xml: %s", err)
 	}
 
-
-	it := xp_req.Iter(doc)
-	ok := it.Next()
-
-	for ok == true {
-		item := it.Node()
-		fmt.Printf("%s=%s", item.name, item.counter)
-		ok = it.Next()
-
+	it := xpRequest.Iter(doc)
+	for it.Next() {
+		node := it.Node()
+		name, _ := xpName.String(node)
+		name = strings.ToLower(name)
+		value, _ := xpCounter.String(node)
+		ival, _ := strconv.ParseUint(value, 10, 64)
+		acc.Add(fmt.Sprintf("total_%s", name), ival, tags, ts)
 	}
 
- //  fmt.Printf("%s", doc)
-
-
+	it = xpQueryDetail.Iter(doc)
+	for it.Next() {
+		node := it.Node()
+		name, _ := xpName.String(node)
+		name = strings.ToLower(name)
+		value, _ := xpCounter.String(node)
+		ival, _ := strconv.ParseUint(value, 10, 64)
+		acc.Add(fmt.Sprintf("query_%s", name), ival, tags, ts)
+	}
 
 	return nil
 }
